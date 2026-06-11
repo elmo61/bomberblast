@@ -130,6 +130,11 @@
 
     removePlayer(id) { this.players.delete(id); }
 
+    renamePlayer(id, name) {
+      const p = this.players.get(id);
+      if (p && name) p.name = String(name).substring(0, 14);
+    }
+
     setInput(id, input) {
       const player = this.players.get(id);
       if (!player || !player.alive) return;

@@ -10,6 +10,9 @@ let roomId   = null;
 let isHost   = false;
 let screen   = 'lobby';   // 'lobby' | 'game' | 'end'
 let pendingJoinCode = null;   // last code we tried to join (for the "host it instead" offer)
+let inRoom   = false;         // true once we've created/joined (arms the quit guard)
+
+const NAME_KEY = 'bomberblast_name';   // localStorage key for the remembered name
 
 let MAP_W = 15, MAP_H = 13;
 let gameSnap = null;   // latest snapshot from server
@@ -105,6 +108,11 @@ function applyLobbyState(data) {
   roomId  = data.roomId;
   isHost  = data.hostId === myId;
 
+  // Once we're in a room, the create/join controls are redundant — the room
+  // code + "copy invite link" below handles sharing.
+  ['btn-create', 'lobby-divider', 'join-row', 'join-error', 'btn-host-room']
+    .forEach(id => { document.getElementById(id).style.display = 'none'; });
+
   document.getElementById('room-code').textContent  = data.roomId;
   document.getElementById('room-code-area').style.display = '';
 
@@ -117,15 +125,20 @@ function applyLobbyState(data) {
 
   const startBtn = document.getElementById('btn-start');
   const waitMsg  = document.getElementById('waiting-msg');
+  const reloadBtn = document.getElementById('btn-reload');
   if (isHost) {
     startBtn.style.display = '';
     startBtn.disabled      = false;
     startBtn.textContent   = data.players.length < 2 ? 'Start (Solo Practice)' : 'Start Game';
     startBtn.title         = '';
     waitMsg.style.display  = 'none';
+    reloadBtn.style.display = 'none';
   } else {
     startBtn.style.display = 'none';
     waitMsg.style.display  = data.players.length > 0 ? '' : 'none';
+    // Escape hatch for guests left hanging if the host vanishes without a clean
+    // "host left" signal — reload reconnects to the same room (code kept in URL).
+    reloadBtn.style.display = '';
   }
 
   if (screen !== 'lobby') showScreen('lobby');
@@ -270,14 +283,6 @@ function draw() {
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(buf, 0, 0, buf.width, buf.height, 0, 0, canvas.width, canvas.height);
-
-  // Name tags drawn on top at display resolution so text stays sharp
-  for (const p of players) {
-    if (!p.alive) continue;
-    const meta = playerMeta[p.id] || { name: '', color: '#888' };
-    const pos = renderPos(p);
-    drawNameTag(meta.name, pos.x * TILE, pos.y * TILE - TILE * 0.6, p.id === myId);
-  }
 
   updateHUD(players);
 }
@@ -437,21 +442,6 @@ function drawExplosionArt(exp, nowT) {
   }
 }
 
-function drawNameTag(name, cx, topY, isMe) {
-  if (!name) return;
-  const fSize = Math.max(8, Math.floor(TILE * 0.2));
-  ctx.font = `${fSize}px "Silkscreen", monospace`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  const tw = Math.ceil(ctx.measureText(name).width) + 8;
-  const th = fSize + 6;
-  const y = topY - th;
-  ctx.fillStyle = isMe ? 'rgba(74,48,22,0.9)' : 'rgba(20,16,12,0.7)';
-  roundRect(ctx, Math.round(cx - tw / 2), Math.round(y), tw, th, 4);
-  ctx.fillStyle = '#fdf6e3';
-  ctx.fillText(name, cx, y + th / 2 + 1);
-}
-
 function darken(hex, amt) {
   const c = parseInt(hex.slice(1), 16);
   const r = Math.max(0, (c >> 16) - amt);
@@ -482,21 +472,6 @@ function lighten(hex, amt) {
   const g = Math.min(255, ((c >> 8) & 0xff) + amt);
   const b = Math.min(255, (c & 0xff) + amt);
   return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
-}
-
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-  ctx.fill();
 }
 
 /* ─── Keyboard input ─────────────────────────────────────────────────────────── */
@@ -568,12 +543,14 @@ Net.onRoomCreated = ({ roomId: id, playerId }) => {
   myId   = playerId;
   roomId = id;
   lockJoinUI();
+  armQuitGuard();
 };
 
 Net.onRoomJoined = ({ roomId: id, playerId }) => {
   myId   = playerId;
   roomId = id;
   lockJoinUI();
+  armQuitGuard();
 };
 
 Net.onLobbyState = data => {
@@ -662,12 +639,41 @@ function showEndScreen(winner) {
 
 /* ─── UI helpers ─────────────────────────────────────────────────────────────── */
 function lockJoinUI() {
-  // Disable create/join once in a room
+  // Disable create/join once in a room. The name field stays editable so you
+  // can change your display name from the lobby (Net.setName propagates it).
   document.getElementById('btn-create').disabled = true;
   document.getElementById('btn-join').disabled   = true;
   document.getElementById('join-input').disabled  = true;
-  document.getElementById('name-input').disabled  = true;
 }
+
+/* ─── Quit guard ─────────────────────────────────────────────────────────────
+   Players were accidentally leaving mid-game via the browser back button, a
+   swipe-back gesture, or a tab close. Warn before any of those unload the page,
+   and intercept history back-navigation with a confirm so it can be cancelled. */
+function armQuitGuard() {
+  if (inRoom) return;
+  inRoom = true;
+  // Keep the room code in the URL so a reload (manual or via the reload button)
+  // lands back on this room and can reconnect.
+  if (roomId) history.replaceState(null, '', `${location.pathname}?room=${roomId}`);
+  // Seed a history entry so a back press has something to pop — letting us catch
+  // it in the popstate handler instead of silently leaving.
+  history.pushState(null, '', location.href);
+}
+
+window.addEventListener('beforeunload', e => {
+  if (inRoom) { e.preventDefault(); e.returnValue = ''; }
+});
+
+window.addEventListener('popstate', () => {
+  if (!inRoom) return;
+  if (window.confirm('Leave the game and exit the room?')) {
+    inRoom = false;
+    location.href = location.origin + location.pathname;   // reset (drops ?room)
+  } else {
+    history.pushState(null, '', location.href);            // cancel — stay put
+  }
+});
 
 /* ─── Init ───────────────────────────────────────────────────────────────────── */
 window.addEventListener('DOMContentLoaded', () => {
@@ -681,6 +687,24 @@ window.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-create').style.display = 'none';
     document.getElementById('lobby-divider').style.display = 'none';
   }
+
+  // Remember the player's name across visits, and let them change it live in the
+  // lobby (Net.setName tells the host, who rebroadcasts the updated player list).
+  const nameInput = document.getElementById('name-input');
+  const savedName = localStorage.getItem(NAME_KEY);
+  if (savedName && !nameInput.value) nameInput.value = savedName;
+  nameInput.addEventListener('input', () => {
+    const n = nameInput.value.trim();
+    if (!n) return;
+    localStorage.setItem(NAME_KEY, n);
+    if (inRoom) Net.setName(n);
+  });
+
+  // ─── How to Play ─────────────────────────────────────────────────────────
+  const helpModal = document.getElementById('help-modal');
+  document.getElementById('btn-help').addEventListener('click', () => { helpModal.style.display = 'flex'; });
+  document.getElementById('btn-help-close').addEventListener('click', () => { helpModal.style.display = 'none'; });
+  helpModal.addEventListener('click', e => { if (e.target === helpModal) helpModal.style.display = 'none'; });
 
   // Create room
   document.getElementById('btn-create').addEventListener('click', () => {
@@ -751,4 +775,16 @@ window.addEventListener('DOMContentLoaded', () => {
     if (roomId) Net.playAgain();
     else showScreen('lobby');
   });
+
+  // Reload & reconnect (for guests stuck if the host vanished). Clear the quit
+  // guard first so the reload doesn't trigger the "leave site?" warning.
+  document.getElementById('btn-reload').addEventListener('click', () => {
+    inRoom = false;
+    location.reload();
+  });
+
+  // After a reload, if we have both a room code (kept in the URL) and a
+  // remembered name, rejoin automatically so reconnecting is hands-free. If the
+  // room is gone, onJoinError surfaces the "host this room instead" option.
+  if (urlRoom && nameInput.value.trim()) doJoin();
 });

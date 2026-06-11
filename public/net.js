@@ -99,6 +99,9 @@
       if (msg.t === 'hello') {
         core.addPlayer(peerId, msg.name);
         broadcastLobby();
+      } else if (msg.t === 'rename') {
+        core.renamePlayer(peerId, msg.name);
+        broadcastLobby();
       } else if (msg.t === 'input') {
         core.setInput(peerId, msg.input);
       }
@@ -229,6 +232,18 @@
   Net.createRoom = function (name, code) {
     myName = name;
     sig.emit('createRoom', code ? { name, roomId: code } : { name });
+  };
+
+  // Change your display name while in the lobby. Host updates its own GameCore
+  // and rebroadcasts; a guest tells the host, who does the same.
+  Net.setName = function (name) {
+    if (!name) return;
+    myName = name;
+    if (isHost) {
+      if (core) { core.renamePlayer(myId, name); broadcastLobby(); }
+    } else {
+      send(hostCh, { t: 'rename', name });
+    }
   };
   Net.joinRoom   = function (code, name) { myName = name; sig.emit('joinRoom', { roomId: code, name }); };
 
