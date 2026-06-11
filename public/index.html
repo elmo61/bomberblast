@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>BomberBlast</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Nunito:wght@600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ═══════════════ LOBBY SCREEN ═══════════════ -->
+  <div id="screen-lobby">
+    <div class="lobby-card">
+      <h1 class="game-title">BOMBER<span>BLAST</span></h1>
+      <p class="subtitle">Multiplayer Bomberman for everyone</p>
+
+      <div class="input-group">
+        <input id="name-input" type="text" maxlength="14" placeholder="Your name" autocomplete="off" spellcheck="false">
+      </div>
+
+      <div class="lobby-actions">
+        <button id="btn-create" class="btn btn-green">Create Room</button>
+        <div class="divider">— or —</div>
+        <div class="join-row">
+          <input id="join-input" type="text" maxlength="6" placeholder="Room code" autocomplete="off" spellcheck="false" style="text-transform:uppercase">
+          <button id="btn-join" class="btn btn-blue">Join</button>
+        </div>
+        <p id="join-error" class="error-text"></p>
+      </div>
+
+      <div id="room-code-area" style="display:none" class="room-code-area">
+        <div class="room-code-label">Room Code</div>
+        <div class="room-code-value" id="room-code"></div>
+        <button id="btn-copy" class="btn btn-outline">Copy Invite Link</button>
+      </div>
+
+      <ul id="player-list" class="player-list"></ul>
+
+      <button id="btn-start" class="btn btn-orange" style="display:none">Start Game</button>
+      <p id="waiting-msg" class="waiting-msg" style="display:none">Waiting for host to start...</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════ GAME SCREEN ═══════════════ -->
+  <div id="screen-game" style="display:none">
+    <button id="btn-exit" title="Exit to menu">✕ Menu</button>
+    <div id="hud" class="hud"></div>
+    <canvas id="gameCanvas" touch-action="none"></canvas>
+
+    <div id="touch-controls" style="display:none">
+      <div id="dpad">
+        <div></div>
+        <button class="dpad-btn" data-dir="up">▲</button>
+        <div></div>
+        <button class="dpad-btn" data-dir="left">◀</button>
+        <div class="dpad-center"></div>
+        <button class="dpad-btn" data-dir="right">▶</button>
+        <div></div>
+        <button class="dpad-btn" data-dir="down">▼</button>
+        <div></div>
+      </div>
+      <button id="bomb-btn">BOMB</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════ END SCREEN ═══════════════ -->
+  <div id="screen-end" style="display:none">
+    <div class="end-card">
+      <div id="winner-text" class="winner-text"></div>
+      <div class="end-actions">
+        <button id="btn-play-again" class="btn btn-green" style="display:none">Play Again</button>
+        <button id="btn-back-lobby" class="btn btn-outline">Back to Lobby</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="game-core.js"></script>
+  <script src="net.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
