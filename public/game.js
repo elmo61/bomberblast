@@ -833,7 +833,8 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 
   if (TEST_MODE) {
-    console.log('[BomberBlast] TEST MODE — quit guards disabled (use ?test=0 to turn off)');
+    GameAudio.disable();   // keep automated previews silent
+    console.log('[BomberBlast] TEST MODE — quit guards + audio disabled (use ?test=0 to turn off)');
     const badge = document.createElement('div');
     badge.id = 'test-badge';
     badge.textContent = 'TEST MODE';

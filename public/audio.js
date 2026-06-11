@@ -14,11 +14,12 @@
   let ctx, master, musicGain, sfxGain;
   let keepOsc = null, musicTimer = null, musicOn = false;
   let muted = localStorage.getItem(MUTE_KEY) === '1';
+  let disabled = false;   // hard off-switch (used by test mode) — no context, no sound
 
   const MUSIC_VOL = 0.16, SFX_VOL = 0.5;
 
   function ensure() {
-    if (ctx) return;
+    if (disabled || ctx) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     ctx = new AC();
@@ -28,8 +29,17 @@
   }
 
   function unlock() {
+    if (disabled) return;
     ensure();
     if (ctx && ctx.state === 'suspended') ctx.resume();
+  }
+
+  // Hard off-switch — stops any sound and makes every call a no-op. Used by the
+  // app's test mode so automated previews stay silent.
+  function disable() {
+    disabled = true;
+    stopMusic();
+    if (ctx) { try { ctx.close(); } catch (e) {} ctx = null; }
   }
 
   // ─── Tone helpers ─────────────────────────────────────────────────────────
@@ -131,5 +141,5 @@
   }
   function isMuted() { return muted; }
 
-  window.GameAudio = { unlock, sfx, startMusic, stopMusic, setMuted, isMuted };
+  window.GameAudio = { unlock, sfx, startMusic, stopMusic, setMuted, isMuted, disable };
 })();
