@@ -93,6 +93,7 @@
       this.explosions = [];            // { id, tiles, ttl }
       this.powerups = [];              // { id, tx, ty, type }
       this.winner = null;
+      this.scores = {};                // playerId → match wins (persists across rounds)
       this.lastTick = null;
       this.lastSnapStr = null;         // idle-skip signature
       this._idc = 0;                   // monotonic id counter (replaces randomUUID)
@@ -349,11 +350,14 @@
       }
 
       const alive = [...this.players.values()].filter(p => p.alive);
-      if (alive.length <= 1 && this.players.size > 1) {
+      if (alive.length <= 1 && this.players.size > 1 && this.state === 'playing') {
         this.state = 'ended';
         this.winner = alive[0]
           ? { id: alive[0].id, name: alive[0].name, color: alive[0].color }
           : null;
+        // Tally the win for the room scoreboard (guarded to 'playing' above so it
+        // only counts once as the match transitions to ended).
+        if (this.winner) this.scores[this.winner.id] = (this.scores[this.winner.id] || 0) + 1;
       }
 
       return { gridChanged };
@@ -372,6 +376,7 @@
           mv: p.moving ? 1 : 0,
           alive: p.alive,
           maxBombs: p.maxBombs, range: p.range, speed: p.speed,
+          score: this.scores[p.id] || 0,
         })),
         bombs: [...this.bombs.values()].map(b => ({
           id: b.id, tx: b.tx, ty: b.ty, range: b.range,

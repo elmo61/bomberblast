@@ -409,19 +409,78 @@ html, body {
   white-space: nowrap;
 }
 
-.help-powerups .pu {
+.help-powerups .pu-icon {
   flex-shrink: 0;
-  width: 30px; height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
+  width: 34px; height: 34px;
+  image-rendering: pixelated;
   border-radius: 8px;
   background: #1c1610;
   border: 1px solid #4a3526;
+  padding: 1px;
 }
 
 #btn-help { margin-top: 2px; }
+
+/* ─── Join QR code ─────────────────────────────────────────────────────────── */
+.qr-box {
+  background: #fff;
+  padding: 6px;
+  border-radius: 8px;
+  line-height: 0;
+}
+.qr-box img, .qr-box canvas { display: block; image-rendering: pixelated; width: 132px; height: 132px; }
+.qr-box:empty { display: none; }
+.qr-hint { font-size: 11px; color: #9c8a72; text-transform: uppercase; letter-spacing: 1px; }
+
+/* ─── End-screen scoreboard ────────────────────────────────────────────────── */
+.end-scores {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #1c1610;
+  border: 2px solid #4a3526;
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.end-scores:empty { display: none; }
+.score-title {
+  font-size: 11px;
+  color: #9c8a72;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  text-align: center;
+  margin-bottom: 2px;
+}
+.score-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 15px;
+  font-weight: 700;
+}
+.score-num {
+  font-family: 'Silkscreen', monospace;
+  color: #f4c542;
+  min-width: 24px;
+  text-align: right;
+}
+
+/* ─── Test-mode badge ──────────────────────────────────────────────────────── */
+#test-badge {
+  position: fixed;
+  top: 6px;
+  right: 6px;
+  z-index: 200;
+  background: #c0392b;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  pointer-events: none;
+  opacity: 0.85;
+}
 
 /* ─── Responsive tweaks ────────────────────────────────────────────────────── */
 @media (max-width: 400px) {

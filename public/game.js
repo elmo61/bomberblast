@@ -14,6 +14,20 @@ let inRoom   = false;         // true once we've created/joined (arms the quit g
 
 const NAME_KEY = 'bomberblast_name';   // localStorage key for the remembered name
 
+/* Test mode — disables the accidental-quit guards (beforeunload warning + back/
+   swipe interception) so automated previews and dev testing can navigate/reload
+   freely. Enable with ?test=1 (sticky — persisted to localStorage so it survives
+   reloads and the in-app URL rewrites); disable with ?test=0. */
+const TEST_MODE = (() => {
+  const p = new URLSearchParams(location.search);
+  if (p.has('test')) {
+    const v = p.get('test');
+    if (v === '0' || v === 'false') localStorage.removeItem('bomberblast_test');
+    else localStorage.setItem('bomberblast_test', '1');
+  }
+  return localStorage.getItem('bomberblast_test') === '1';
+})();
+
 let MAP_W = 15, MAP_H = 13;
 let gameSnap = null;   // latest snapshot from server
 let grid     = null;   // current tile grid (sent on start + when it changes)
@@ -115,6 +129,7 @@ function applyLobbyState(data) {
 
   document.getElementById('room-code').textContent  = data.roomId;
   document.getElementById('room-code-area').style.display = '';
+  renderQR(`${location.origin}${location.pathname}?room=${data.roomId}`);
 
   const list = document.getElementById('player-list');
   list.innerHTML = data.players.map(p => {
@@ -142,6 +157,24 @@ function applyLobbyState(data) {
   }
 
   if (screen !== 'lobby') showScreen('lobby');
+}
+
+/* Render a small QR of the invite link into the lobby. The library is loaded
+   from a CDN; if it's unavailable the QR (and its hint) are simply hidden — the
+   "Copy Invite Link" button still covers sharing. */
+function renderQR(url) {
+  const box  = document.getElementById('qr-box');
+  const hint = document.querySelector('.qr-hint');
+  const hide = () => { box.style.display = 'none'; if (hint) hint.style.display = 'none'; };
+  if (typeof qrcode === 'undefined') return hide();
+  try {
+    const qr = qrcode(0, 'M');
+    qr.addData(url);
+    qr.make();
+    box.innerHTML = qr.createImgTag(4, 0);
+    box.style.display = '';
+    if (hint) hint.style.display = '';
+  } catch (e) { hide(); }
 }
 
 /* ─── Rendering ──────────────────────────────────────────────────────────────── */
@@ -404,22 +437,64 @@ function drawPlayerArt(p) {
 
 function drawPowerupArt(pu, nowT) {
   const bob = Math.round(Math.sin(nowT / 350 + pu.tx));
-  const cx = pu.tx * ART + 8, cy = pu.ty * ART + 8 + bob;
-  fillCircleArt(cx, pu.ty * ART + 13, 4, 'rgba(0,0,0,0.18)');
-  if (pu.type === 'bomb') {
-    fillCircleArt(cx, cy, 4, '#2e2e3a');
-    R(cx - 1, cy - 2, 2, 2, '#9a9ab5');
-    R(cx - 5, cy, 1, 1, '#e67e22'); R(cx + 5, cy, 1, 1, '#e67e22');
-    R(cx, cy - 5, 1, 1, '#e67e22'); R(cx, cy + 5, 1, 1, '#e67e22');
-  } else if (pu.type === 'range') {
-    fillCircleArt(cx, cy, 4, '#e0432b');
-    fillCircleArt(cx, cy + 1, 3, '#f0851f');
-    R(cx - 1, cy - 1, 2, 2, '#ffe34d');
-  } else if (pu.type === 'speed') {
-    R(cx + 1, cy - 5, 2, 3, '#39c6dd');
-    R(cx - 1, cy - 2, 3, 3, '#39c6dd');
-    R(cx - 2, cy + 1, 3, 4, '#39c6dd');
-    R(cx, cy - 1, 1, 1, '#dffaff');
+  fillCircleArt(pu.tx * ART + 8, pu.ty * ART + 14, 5, 'rgba(0,0,0,0.18)');   // ground shadow
+  paintPowerup(bctx, pu.type, pu.tx * ART, pu.ty * ART + bob, 1);
+}
+
+/* Power-up icon, drawn on a 16×16 art grid into any 2D context. Used both for
+   the in-game pickups (u=1 into the low-res buffer) and the How-to-Play menu
+   (larger u into small canvases) so the two always match exactly. */
+function paintPowerup(g, type, ox, oy, u) {
+  const rr = (x, y, w, h, c) => { g.fillStyle = c; g.fillRect(ox + x * u, oy + y * u, w * u, h * u); };
+  const disc = (cx, cy, r, c) => {
+    g.fillStyle = c;
+    for (let yy = -r; yy <= r; yy++) {
+      const span = Math.floor(Math.sqrt(Math.max(0, r * r - yy * yy)));
+      g.fillRect(ox + (cx - span) * u, oy + (cy + yy) * u, (span * 2 + 1) * u, u);
+    }
+  };
+
+  const theme = {
+    bomb:  { base: '#4a90e2', rim: '#2c5f9e', hi: '#9fc6f2' },
+    range: { base: '#ef6d3a', rim: '#b8431d', hi: '#ffb083' },
+    speed: { base: '#1bb6c9', rim: '#127f8e', hi: '#86e6f1' },
+  }[type] || { base: '#888', rim: '#555', hi: '#bbb' };
+
+  // Floating orb
+  disc(8, 8, 6, theme.rim);
+  disc(8, 8, 5, theme.base);
+  disc(6, 6, 2, theme.hi);             // glossy highlight
+
+  if (type === 'bomb') {
+    // Dark bomb with a fuse spark + a white "+" badge (= one more bomb).
+    disc(8, 9, 3, '#23232c');
+    rr(6, 8, 1, 1, '#aab4c8');         // shine
+    rr(10, 5, 1, 1, '#caa477');        // fuse
+    rr(11, 4, 1, 1, '#caa477');
+    rr(11, 3, 1, 1, '#ffd34d');        // spark
+    rr(3, 4, 3, 1, '#ffffff');         // + badge
+    rr(4, 3, 1, 3, '#ffffff');
+  } else if (type === 'range') {
+    // Explosion starburst (= bigger blast).
+    rr(7, 4, 2, 3, '#ffe34d');         // up spike
+    rr(7, 9, 2, 3, '#ffe34d');         // down spike
+    rr(4, 7, 3, 2, '#ffe34d');         // left spike
+    rr(9, 7, 3, 2, '#ffe34d');         // right spike
+    rr(7, 7, 2, 2, '#ffffff');         // hot core
+    rr(5, 5, 1, 1, '#fff3b0');         // diagonal sparks
+    rr(10, 5, 1, 1, '#fff3b0');
+    rr(5, 10, 1, 1, '#fff3b0');
+    rr(10, 10, 1, 1, '#fff3b0');
+  } else if (type === 'speed') {
+    // White lightning bolt (= move faster).
+    rr(10, 3, 2, 1, '#ffffff');
+    rr(9, 4, 2, 1, '#ffffff');
+    rr(8, 5, 2, 1, '#ffffff');
+    rr(6, 6, 5, 1, '#ffffff');         // kink
+    rr(8, 7, 2, 1, '#ffffff');
+    rr(7, 8, 2, 1, '#ffffff');
+    rr(6, 9, 2, 1, '#ffffff');
+    rr(8, 6, 1, 1, '#bfeef6');         // subtle inner shade
   }
 }
 
@@ -633,7 +708,27 @@ function showEndScreen(winner) {
   } else {
     el.textContent = "It's a draw!";
   }
+
+  // Running room scoreboard (match wins per player, highest first).
+  const scoresEl = document.getElementById('end-scores');
+  const players = (gameSnap && gameSnap.players) ? [...gameSnap.players] : [];
+  if (players.length) {
+    const rows = players
+      .sort((a, b) => (b.score || 0) - (a.score || 0))
+      .map(p => {
+        const meta = playerMeta[p.id] || { name: '?', color: '#888' };
+        return `<div class="score-row"><span style="color:${meta.color}">${meta.name}</span>` +
+               `<span class="score-num">${p.score || 0}</span></div>`;
+      }).join('');
+    scoresEl.innerHTML = `<div class="score-title">Wins</div>${rows}`;
+  } else {
+    scoresEl.innerHTML = '';
+  }
+
+  // Only the host controls what happens next; guests just wait to be taken back.
   document.getElementById('btn-play-again').style.display = isHost ? '' : 'none';
+  document.getElementById('btn-back-lobby').style.display = isHost ? '' : 'none';
+  document.getElementById('end-waiting').style.display    = isHost ? 'none' : '';
   showScreen('end');
 }
 
@@ -657,16 +752,16 @@ function armQuitGuard() {
   // lands back on this room and can reconnect.
   if (roomId) history.replaceState(null, '', `${location.pathname}?room=${roomId}`);
   // Seed a history entry so a back press has something to pop — letting us catch
-  // it in the popstate handler instead of silently leaving.
-  history.pushState(null, '', location.href);
+  // it in the popstate handler instead of silently leaving. Skipped in test mode.
+  if (!TEST_MODE) history.pushState(null, '', location.href);
 }
 
 window.addEventListener('beforeunload', e => {
-  if (inRoom) { e.preventDefault(); e.returnValue = ''; }
+  if (inRoom && !TEST_MODE) { e.preventDefault(); e.returnValue = ''; }
 });
 
 window.addEventListener('popstate', () => {
-  if (!inRoom) return;
+  if (!inRoom || TEST_MODE) return;
   if (window.confirm('Leave the game and exit the room?')) {
     inRoom = false;
     location.href = location.origin + location.pathname;   // reset (drops ?room)
@@ -678,6 +773,14 @@ window.addEventListener('popstate', () => {
 /* ─── Init ───────────────────────────────────────────────────────────────────── */
 window.addEventListener('DOMContentLoaded', () => {
   setupTouchControls();
+
+  if (TEST_MODE) {
+    console.log('[BomberBlast] TEST MODE — quit guards disabled (use ?test=0 to turn off)');
+    const badge = document.createElement('div');
+    badge.id = 'test-badge';
+    badge.textContent = 'TEST MODE';
+    document.body.appendChild(badge);
+  }
 
   // Arriving via an invite link → prefill the code and present a join-only
   // screen (hide the create option + divider; the host already made the room).
@@ -701,6 +804,14 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 
   // ─── How to Play ─────────────────────────────────────────────────────────
+  // Render the power-up icons with the exact same routine the game uses, so the
+  // key matches what players actually see on the board.
+  document.querySelectorAll('.pu-icon').forEach(cv => {
+    const g = cv.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    paintPowerup(g, cv.dataset.pu, 0, 0, cv.width / 16);
+  });
+
   const helpModal = document.getElementById('help-modal');
   document.getElementById('btn-help').addEventListener('click', () => { helpModal.style.display = 'flex'; });
   document.getElementById('btn-help-close').addEventListener('click', () => { helpModal.style.display = 'none'; });
