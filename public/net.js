@@ -17,6 +17,7 @@
   'use strict';
 
   const TICK_MS = 1000 / 30;
+  const COUNTDOWN_GO_MS = 2100;   // must match the client countdown's "GO!" moment
   const ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
   const sig = io();              // signaling connection (handshake + lobby setup only)
@@ -254,7 +255,9 @@
     const payload = { mapW: GameCore.MAP_W, mapH: GameCore.MAP_H, grid: core.grid, players: core.lobbyMeta() };
     broadcast({ t: 'start', payload });
     Net.onGameStart && Net.onGameStart(payload);
-    startLoop();
+    // Hold the simulation frozen during the 3-2-1 countdown so nobody moves or
+    // bombs before "GO!" (clients run the matching countdown on gameStart).
+    setTimeout(startLoop, COUNTDOWN_GO_MS);
   };
 
   Net.sendInput = function (input) {

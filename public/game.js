@@ -11,6 +11,7 @@ let isHost   = false;
 let screen   = 'lobby';   // 'lobby' | 'game' | 'end'
 let pendingJoinCode = null;   // last code we tried to join (for the "host it instead" offer)
 let inRoom   = false;         // true once we've created/joined (arms the quit guard)
+let countingDown = false;     // true during the 3-2-1 intro (input + prediction frozen)
 
 const NAME_KEY = 'bomberblast_name';   // localStorage key for the remembered name
 
@@ -67,7 +68,7 @@ function currentInput() {
 }
 
 function sendInput() {
-  if (screen !== 'game') return;
+  if (screen !== 'game' || countingDown) return;
   const inp = currentInput();
   const str = JSON.stringify(inp);
   if (str !== lastSentInput) {
@@ -114,6 +115,7 @@ function showScreen(name) {
     if (!rafHandle) rafHandle = requestAnimationFrame(renderLoop);
   } else {
     if (rafHandle) { cancelAnimationFrame(rafHandle); rafHandle = null; }
+    if (window.GameAudio) GameAudio.stopMusic();   // leaving the board → cut the music
   }
 }
 
@@ -237,7 +239,7 @@ function predChooseDir(input) {
 }
 
 function stepPrediction(dt) {
-  if (!gameSnap || !grid || !predict) return;
+  if (!gameSnap || !grid || !predict || countingDown) return;
   const me = gameSnap.players.find(p => p.id === myId);
   if (!me || !me.alive) return;
 
@@ -660,7 +662,32 @@ Net.onGameStart = ({ mapW, mapH, grid: g, players }) => {
   lastSentInput = '';
   lastFrame = performance.now();
   showScreen('game');
+  runCountdown();
 };
+
+/* 3-2-1-GO intro. Freezes input/prediction until "GO!" (the host holds the
+   simulation for the same duration), with a beep on each beat. */
+function runCountdown() {
+  const el = document.getElementById('countdown');
+  if (!el) return;
+  countingDown = true;
+  const show = txt => {
+    el.textContent = txt;
+    el.style.display = 'flex';
+    el.classList.remove('pop');
+    void el.offsetWidth;          // restart the CSS pop animation
+    el.classList.add('pop');
+  };
+  show('3'); if (window.GameAudio) GameAudio.sfx('count');
+  setTimeout(() => { show('2'); GameAudio.sfx('count'); }, 700);
+  setTimeout(() => { show('1'); GameAudio.sfx('count'); }, 1400);
+  setTimeout(() => {                          // GO! — play begins
+    show('GO!'); GameAudio.sfx('go');
+    countingDown = false;
+    GameAudio.startMusic();
+  }, 2100);
+  setTimeout(() => { el.style.display = 'none'; }, 2750);
+}
 
 Net.onGameState = snap => {
   if (snap.grid) grid = snap.grid;   // only sent when it changed
@@ -694,11 +721,28 @@ Net.onGameState = snap => {
   const expIds = new Set(snap.explosions.map(e => e.id));
   for (const id in expSeen) if (!expIds.has(id)) delete expSeen[id];
 
+  detectGameAudio(gameSnap, snap);   // gameSnap is still the previous snapshot here
   gameSnap = snap;
   if (snap.state === 'ended') {
     setTimeout(() => showEndScreen(snap.winner), 700);
   }
 };
+
+/* Compare consecutive snapshots and fire the matching SFX. At most one of each
+   kind per snapshot so a multi-bomb chain doesn't turn into a wall of noise. */
+function detectGameAudio(prev, snap) {
+  if (!prev || !window.GameAudio) return;   // skip the very first snapshot
+
+  if (snap.bombs.some(b => !prev.bombs.find(o => o.id === b.id))) GameAudio.sfx('place');
+  if (snap.explosions.some(e => !prev.explosions.find(o => o.id === e.id))) GameAudio.sfx('boom');
+  if (prev.powerups.some(p => !snap.powerups.find(o => o.id === p.id))) GameAudio.sfx('power');
+
+  const wasAlive = {};
+  prev.players.forEach(p => { wasAlive[p.id] = p.alive; });
+  if (snap.players.some(p => wasAlive[p.id] && !p.alive)) GameAudio.sfx('death');
+
+  if (snap.state === 'ended' && prev.state !== 'ended') GameAudio.sfx('win');
+}
 
 /* ─── End screen ─────────────────────────────────────────────────────────────── */
 function showEndScreen(winner) {
@@ -773,6 +817,20 @@ window.addEventListener('popstate', () => {
 /* ─── Init ───────────────────────────────────────────────────────────────────── */
 window.addEventListener('DOMContentLoaded', () => {
   setupTouchControls();
+
+  // Audio needs a user gesture to start; unlock on the first interaction.
+  ['pointerdown', 'keydown', 'touchstart'].forEach(ev =>
+    window.addEventListener(ev, () => GameAudio.unlock(), { once: true }));
+
+  // Mute toggle (persisted in GameAudio via localStorage).
+  const muteBtn = document.getElementById('btn-mute');
+  const syncMute = () => { muteBtn.textContent = GameAudio.isMuted() ? '🔇' : '🔊'; };
+  syncMute();
+  muteBtn.addEventListener('click', () => {
+    GameAudio.unlock();
+    GameAudio.setMuted(!GameAudio.isMuted());
+    syncMute();
+  });
 
   if (TEST_MODE) {
     console.log('[BomberBlast] TEST MODE — quit guards disabled (use ?test=0 to turn off)');

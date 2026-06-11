@@ -42,11 +42,12 @@ html, body {
 /* ─── Lobby Screen ─────────────────────────────────────────────────────────── */
 #screen-lobby {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
   width: 100%;
   height: 100%;
   padding: 16px;
+  overflow-y: auto;            /* scroll when the card is taller than the screen */
 }
 
 .lobby-card {
@@ -57,6 +58,7 @@ html, body {
   padding: 28px 24px;
   width: 100%;
   max-width: 420px;
+  margin: auto;                /* centers when it fits, but stays scrollable when tall */
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -211,6 +213,51 @@ html, body {
 #btn-exit:hover  { background: rgba(0,0,0,0.75); color: #fff; }
 #btn-exit:active { transform: scale(0.94); }
 
+#btn-mute {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 10;
+  background: rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.25);
+  color: #ddd;
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+#btn-mute:hover  { background: rgba(0,0,0,0.75); }
+#btn-mute:active { transform: scale(0.94); }
+
+/* Canvas + countdown overlay */
+#canvas-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.countdown-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  font-family: 'Silkscreen', monospace;
+  font-size: clamp(64px, 22vmin, 160px);
+  font-weight: 700;
+  color: #f4c542;
+  text-shadow: 0 4px 0 #7a4a1e, 0 0 24px rgba(244,197,66,0.6);
+}
+.countdown-overlay.pop { animation: countPop 0.55s ease-out; }
+@keyframes countPop {
+  0%   { transform: scale(0.4); opacity: 0; }
+  35%  { transform: scale(1.25); opacity: 1; }
+  100% { transform: scale(1);    opacity: 0.92; }
+}
+
 /* HUD strip */
 .hud {
   width: 100%;
@@ -308,10 +355,12 @@ html, body {
 /* ─── End Screen ───────────────────────────────────────────────────────────── */
 #screen-end {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
   width: 100%;
   height: 100%;
+  padding: 16px;
+  overflow-y: auto;
 }
 
 .end-card {
@@ -321,6 +370,7 @@ html, body {
   box-shadow: 0 12px 32px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06);
   padding: 48px 32px;
   text-align: center;
+  margin: auto;
   display: flex;
   flex-direction: column;
   gap: 24px;

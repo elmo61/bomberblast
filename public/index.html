@@ -54,8 +54,12 @@
   <!-- ═══════════════ GAME SCREEN ═══════════════ -->
   <div id="screen-game" style="display:none">
     <button id="btn-exit" title="Exit to menu">✕ Menu</button>
+    <button id="btn-mute" title="Mute / unmute">🔊</button>
     <div id="hud" class="hud"></div>
-    <canvas id="gameCanvas" touch-action="none"></canvas>
+    <div id="canvas-wrap">
+      <canvas id="gameCanvas" touch-action="none"></canvas>
+      <div id="countdown" class="countdown-overlay" style="display:none"></div>
+    </div>
 
     <div id="touch-controls" style="display:none">
       <div id="dpad">
@@ -116,6 +120,7 @@
   <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
   <script src="game-core.js"></script>
   <script src="net.js"></script>
+  <script src="audio.js"></script>
   <script src="game.js"></script>
 </body>
 </html>
