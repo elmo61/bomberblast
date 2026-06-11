@@ -92,6 +92,11 @@ function doPlaceBomb() {
   // Skip if a bomb (real or predicted) is already on this tile.
   if (localBombs.some(b => b.tx === tx && b.ty === ty)) return;
   if (gameSnap.bombs.some(b => b.tx === tx && b.ty === ty)) return;
+  // Enforce the bomb limit locally so prediction matches what the host allows —
+  // count my own live bombs (the host tags each with its owner) plus any I've
+  // predicted but it hasn't confirmed yet.
+  const mine = gameSnap.bombs.filter(b => b.by === myId).length + localBombs.length;
+  if (mine >= me.maxBombs) return;
   localBombs.push({ id: 'local-' + tx + '-' + ty + '-' + performance.now(), tx, ty, range: me.range, t: performance.now() });
   Net.placeBomb();
 }

@@ -300,7 +300,7 @@
           score: this.scores[p.id] || 0,
         })),
         bombs: [...this.bombs.values()].map(b => ({
-          id: b.id, tx: b.tx, ty: b.ty, range: b.range,
+          id: b.id, tx: b.tx, ty: b.ty, range: b.range, by: b.playerId,
         })),
         explosions: this.explosions.map(e => ({ id: e.id, tiles: e.tiles })),
         powerups: this.powerups.map(p => ({ id: p.id, tx: p.tx, ty: p.ty, type: p.type })),
