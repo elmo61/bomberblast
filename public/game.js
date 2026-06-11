@@ -40,7 +40,7 @@ let playerMeta = {};   // id → { name, color } (static, from gameStart)
 let anim       = {};   // id → { x, y } animated render position for remote players
 let bombSeen   = {};   // bombId → first-seen timestamp (for local fuse pulse)
 let expSeen    = {};   // explosionId → first-seen timestamp (for local fade)
-let serverSelf = null; // latest authoritative tile for the local player { tx, ty, mv }
+let localBombs = [];   // predicted bombs shown instantly until the host confirms
 
 const BOMB_FUSE_MS = 3000;       // must match server BOMB_TIMER_MS
 const EXPLOSION_TTL_MS = 500;    // must match server
@@ -55,26 +55,45 @@ const STEP_DIRS = [    // must match server
 /* ─── Input ─────────────────────────────────────────────────────────────────── */
 const keyState   = { up: false, down: false, left: false, right: false, bomb: false };
 const touchState = { up: false, down: false, left: false, right: false, bomb: false };
-let lastSentInput = '';
+let lastReport = '';   // last {tx,ty,mv} we told the host, to skip duplicate sends
 
+// Direction-only input (bombs are placed via doPlaceBomb, not held state).
 function currentInput() {
   return {
     up:    keyState.up    || touchState.up,
     down:  keyState.down  || touchState.down,
     left:  keyState.left  || touchState.left,
     right: keyState.right || touchState.right,
-    bomb:  keyState.bomb  || touchState.bomb,
   };
 }
 
-function sendInput() {
-  if (screen !== 'game' || countingDown) return;
-  const inp = currentInput();
-  const str = JSON.stringify(inp);
-  if (str !== lastSentInput) {
-    lastSentInput = str;
-    Net.sendInput(inp);
+// Movement is client-authoritative: we report our own tile to the host whenever
+// it changes. While moving we report the TARGET tile (so remote viewers animate
+// toward it), matching the snapshot semantics other clients expect.
+function reportPosition() {
+  if (screen !== 'game' || !predict) return;
+  const tx = predict.moving ? Math.floor(predict.targetX) : Math.floor(predict.x);
+  const ty = predict.moving ? Math.floor(predict.targetY) : Math.floor(predict.y);
+  const mv = predict.moving ? 1 : 0;
+  const key = tx + ',' + ty + ',' + mv;
+  if (key !== lastReport) {
+    lastReport = key;
+    Net.reportPos(tx, ty, mv);
   }
+}
+
+// Place a bomb at our current tile: tell the host, and show it instantly with a
+// local prediction so it doesn't wait a round-trip to appear.
+function doPlaceBomb() {
+  if (screen !== 'game' || countingDown || !predict) return;
+  const me = gameSnap && gameSnap.players.find(p => p.id === myId);
+  if (!me || !me.alive) return;
+  const tx = Math.floor(predict.x), ty = Math.floor(predict.y);
+  // Skip if a bomb (real or predicted) is already on this tile.
+  if (localBombs.some(b => b.tx === tx && b.ty === ty)) return;
+  if (gameSnap.bombs.some(b => b.tx === tx && b.ty === ty)) return;
+  localBombs.push({ id: 'local-' + tx + '-' + ty + '-' + performance.now(), tx, ty, range: me.range, t: performance.now() });
+  Net.placeBomb();
 }
 
 /* ─── Canvas ─────────────────────────────────────────────────────────────────── */
@@ -186,6 +205,7 @@ function renderLoop() {
   const dt = Math.min((now - lastFrame) / 1000, 0.05);
   lastFrame = now;
   stepPrediction(dt);
+  reportPosition();      // tell the host our tile whenever it changes
   animateRemotes(dt);
   draw();
   rafHandle = requestAnimationFrame(renderLoop);
@@ -209,18 +229,18 @@ function animateRemotes(dt) {
   }
 }
 
-/* Client-side prediction for the local player — mirrors the server's grid-step
-   movement so your own character responds instantly instead of waiting for a
-   network round-trip. The server stays authoritative; gameState reconciles. */
+/* Local movement for your own player. Movement is now client-authoritative — we
+   simulate it here and report the result to the host (no snap-back from the
+   host), so it stays perfectly smooth regardless of latency. Walls and bombs are
+   still respected locally, including bombs we've only predicted, so you can never
+   move through one. */
 function predSolid(tx, ty) {
   if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) return true;
   const v = grid[ty * MAP_W + tx];
   if (v === 1 || v === 2) return true;
-  for (const b of gameSnap.bombs) {
-    if (b.tx === tx && b.ty === ty) {
-      return !(Math.floor(predict.x) === tx && Math.floor(predict.y) === ty);
-    }
-  }
+  const onTile = Math.floor(predict.x) === tx && Math.floor(predict.y) === ty;
+  for (const b of gameSnap.bombs) if (b.tx === tx && b.ty === ty) return !onTile;
+  for (const b of localBombs)    if (b.tx === tx && b.ty === ty) return !onTile;
   return false;
 }
 
@@ -269,20 +289,6 @@ function stepPrediction(dt) {
       remaining = 0;
     }
   }
-
-  // Once WE have come to rest and the server is also at rest, snap to the
-  // server's authoritative tile. This corrects any drift that built up during
-  // a fast scramble. It runs every frame (not just on packet arrival), so it
-  // works even though idle-skip means no snapshot is sent while standing still.
-  if (!predict.moving && serverSelf && serverSelf.mv === 0) {
-    if (Math.floor(predict.x) !== serverSelf.tx || Math.floor(predict.y) !== serverSelf.ty) {
-      predict.x = serverSelf.tx + 0.5;
-      predict.y = serverSelf.ty + 0.5;
-      predict.targetX = predict.x;
-      predict.targetY = predict.y;
-      predict.facing = null;
-    }
-  }
 }
 
 function draw() {
@@ -301,8 +307,9 @@ function draw() {
   // Power-ups sit on the ground, beneath everything
   for (const pu of powerups) drawPowerupArt(pu, nowT);
 
-  // Bombs
+  // Bombs (real, from the host) plus any we've predicted locally for instant feedback
   for (const bomb of bombs) drawBombArt(bomb, nowT);
+  for (const bomb of localBombs) drawBombArt(bomb, nowT);
 
   // Players — local drawn last so it sits on top
   const order = [...players].sort((a, b) => (a.id === myId ? 1 : 0) - (b.id === myId ? 1 : 0));
@@ -560,24 +567,22 @@ window.addEventListener('keydown', e => {
     case 'ArrowDown':  case 'KeyS': keyState.down  = true; break;
     case 'ArrowLeft':  case 'KeyA': keyState.left  = true; break;
     case 'ArrowRight': case 'KeyD': keyState.right = true; break;
-    case 'Space': case 'KeyX': case 'KeyZ': keyState.bomb = true; break;
+    case 'Space': case 'KeyX': case 'KeyZ':
+      if (!e.repeat) doPlaceBomb();   // rising edge → one bomb per press
+      break;
     default: changed = false;
   }
-  if (changed) { e.preventDefault(); sendInput(); }
+  if (changed) e.preventDefault();
 });
 
 window.addEventListener('keyup', e => {
   if (screen !== 'game') return;
-  let changed = true;
   switch (e.code) {
     case 'ArrowUp':    case 'KeyW': keyState.up    = false; break;
     case 'ArrowDown':  case 'KeyS': keyState.down  = false; break;
     case 'ArrowLeft':  case 'KeyA': keyState.left  = false; break;
     case 'ArrowRight': case 'KeyD': keyState.right = false; break;
-    case 'Space': case 'KeyX': case 'KeyZ': keyState.bomb = false; break;
-    default: changed = false;
   }
-  if (changed) sendInput();
 });
 
 /* ─── Touch / D-pad controls ─────────────────────────────────────────────────── */
@@ -588,7 +593,6 @@ function setupTouchControls() {
     const dir = el.dataset.dir;
     touchState[dir] = active;
     el.classList.toggle('pressed', active);
-    sendInput();
   }
 
   dpadBtns.forEach(btn => {
@@ -601,18 +605,11 @@ function setupTouchControls() {
     btn.addEventListener('mouseleave', () => setDir(btn, false));
   });
 
+  // Bomb button drops a bomb on press (one per tap), with a quick pressed style.
   const bombBtn = document.getElementById('bomb-btn');
-  function setBomb(active) {
-    touchState.bomb = active;
-    bombBtn.classList.toggle('pressed', active);
-    sendInput();
-  }
-  bombBtn.addEventListener('touchstart',  e => { e.preventDefault(); setBomb(true);  }, { passive: false });
-  bombBtn.addEventListener('touchend',    e => { e.preventDefault(); setBomb(false); }, { passive: false });
-  bombBtn.addEventListener('touchcancel', e => { e.preventDefault(); setBomb(false); }, { passive: false });
-  bombBtn.addEventListener('mousedown',  () => setBomb(true));
-  bombBtn.addEventListener('mouseup',    () => setBomb(false));
-  bombBtn.addEventListener('mouseleave', () => setBomb(false));
+  const flash = () => { bombBtn.classList.add('pressed'); setTimeout(() => bombBtn.classList.remove('pressed'), 120); };
+  bombBtn.addEventListener('touchstart', e => { e.preventDefault(); doPlaceBomb(); flash(); }, { passive: false });
+  bombBtn.addEventListener('mousedown',  () => { doPlaceBomb(); flash(); });
 }
 
 /* ─── Net events ─────────────────────────────────────────────────────────────── */
@@ -656,10 +653,10 @@ Net.onGameStart = ({ mapW, mapH, grid: g, players }) => {
   anim = {};
   bombSeen = {};
   expSeen = {};
-  serverSelf = null;
+  localBombs = [];
   predict = null;
   gameSnap = null;
-  lastSentInput = '';
+  lastReport = '';
   lastFrame = performance.now();
   showScreen('game');
   runCountdown();
@@ -692,27 +689,22 @@ function runCountdown() {
 Net.onGameState = snap => {
   if (snap.grid) grid = snap.grid;   // only sent when it changed
 
-  // Reconcile local prediction against the server's authoritative TILE. We
-  // tolerate a 1-tile difference (that's just the prediction running ahead of
-  // the server by a network hop); only a larger gap forces a re-sync.
+  // Movement is client-authoritative, so we never snap our own position to the
+  // host's. We only seed prediction once (our spawn, from the first snapshot we
+  // see ourselves in). Death is host-authoritative — stepPrediction stops us when
+  // the host marks us dead.
   const me = snap.players.find(p => p.id === myId);
-  if (me) {
+  if (me && !predict) {
     const cx = me.tx + 0.5, cy = me.ty + 0.5;
-    serverSelf = { tx: me.tx, ty: me.ty, mv: me.mv };  // authoritative tile
-    if (!me.alive || !predict) {
-      predict = { x: cx, y: cy, moving: false, facing: null, targetX: cx, targetY: cy };
-    } else if (me.mv === 1) {
-      // Server is mid-step. A 1-tile lead is just prediction running ahead;
-      // only a larger gap is a real desync worth a hard correction here.
-      // (Exact alignment when both sides come to rest is done in stepPrediction.)
-      const pTx = predict.moving ? Math.floor(predict.targetX) : Math.floor(predict.x);
-      const pTy = predict.moving ? Math.floor(predict.targetY) : Math.floor(predict.y);
-      if (Math.abs(pTx - me.tx) + Math.abs(pTy - me.ty) > 1) {
-        predict.x = cx; predict.y = cy;
-        predict.moving = false; predict.facing = null;
-        predict.targetX = cx; predict.targetY = cy;
-      }
-    }
+    predict = { x: cx, y: cy, moving: false, facing: null, targetX: cx, targetY: cy };
+  }
+
+  // Drop predicted bombs once the host has confirmed a real bomb on that tile,
+  // or after a short timeout (e.g. the host rejected it — bomb limit reached).
+  if (localBombs.length) {
+    const nowT = performance.now();
+    localBombs = localBombs.filter(b =>
+      !snap.bombs.some(rb => rb.tx === b.tx && rb.ty === b.ty) && (nowT - b.t) < 1500);
   }
 
   // Prune local timers for bombs/explosions that no longer exist
@@ -930,9 +922,10 @@ window.addEventListener('DOMContentLoaded', () => {
     Net.startGame();
   });
 
-  // Play again (host)
+  // Play again (host) → straight into a fresh match (scores carry over). The
+  // separate "Back to Lobby" button is there if they'd rather regroup first.
   document.getElementById('btn-play-again').addEventListener('click', () => {
-    Net.playAgain();
+    Net.startGame();
   });
 
   // Exit game → back to menu

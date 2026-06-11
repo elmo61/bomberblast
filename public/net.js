@@ -103,8 +103,10 @@
       } else if (msg.t === 'rename') {
         core.renamePlayer(peerId, msg.name);
         broadcastLobby();
-      } else if (msg.t === 'input') {
-        core.setInput(peerId, msg.input);
+      } else if (msg.t === 'pos') {
+        core.reportPlayer(peerId, msg.tx, msg.ty, msg.mv);
+      } else if (msg.t === 'bomb') {
+        core.placeBomb(peerId);
       }
     };
     ch.onclose = () => dropPeer(peerId);
@@ -260,9 +262,17 @@
     setTimeout(startLoop, COUNTDOWN_GO_MS);
   };
 
-  Net.sendInput = function (input) {
-    if (isHost) core.setInput(myId, input);
-    else send(hostCh, { t: 'input', input });
+  // Client-authoritative position: the host writes its own player directly into
+  // the core; a guest sends its tile over the data channel.
+  Net.reportPos = function (tx, ty, mv) {
+    if (isHost) core.reportPlayer(myId, tx, ty, mv);
+    else send(hostCh, { t: 'pos', tx, ty, mv });
+  };
+
+  // Request a bomb at our current tile (host resolves it authoritatively).
+  Net.placeBomb = function () {
+    if (isHost) core.placeBomb(myId);
+    else send(hostCh, { t: 'bomb' });
   };
 
   Net.playAgain = function () {

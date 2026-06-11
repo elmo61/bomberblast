@@ -32,13 +32,6 @@
     { x: 13.5, y: 11.5 },
   ];
 
-  const STEP_DIRS = [
-    { dx: 0, dy: -1, key: 'up' },
-    { dx: 0, dy: 1,  key: 'down' },
-    { dx: -1, dy: 0, key: 'left' },
-    { dx: 1, dy: 0,  key: 'right' },
-  ];
-
   // ─── Helpers ────────────────────────────────────────────────────────────────
   function enc(tx, ty) { return ty * MAP_W + tx; }
   function now() { return Date.now(); }
@@ -111,19 +104,17 @@
         name: String(name).substring(0, 14),
         color: PLAYER_COLORS[idx],
         spawnIdx: idx,
-        x: spawn.x,
-        y: spawn.y,
+        // Position is client-authoritative: each client moves its own player and
+        // reports its tile (tx,ty) + moving flag (mv). The host stores it and
+        // judges bombs/deaths/pickups from it, but never simulates movement.
+        tx: Math.floor(spawn.x),
+        ty: Math.floor(spawn.y),
+        mv: 0,
         alive: true,
         maxBombs: 1,
         activeBombs: 0,
         range: 2,
         speed: PLAYER_SPEED,
-        input: { up: false, down: false, left: false, right: false, bomb: false },
-        bombPressed: false,
-        moving: false,
-        facing: null,
-        targetX: spawn.x,
-        targetY: spawn.y,
       };
       this.players.set(id, player);
       return player;
@@ -136,16 +127,26 @@
       if (p && name) p.name = String(name).substring(0, 14);
     }
 
-    setInput(id, input) {
-      const player = this.players.get(id);
-      if (!player || !player.alive) return;
-      player.input = {
-        up:    !!input.up,
-        down:  !!input.down,
-        left:  !!input.left,
-        right: !!input.right,
-        bomb:  !!input.bomb,
-      };
+    // Client-authoritative position update (from a guest's data channel, or the
+    // host's own local movement). tx,ty = occupied/target tile, mv = moving flag.
+    reportPlayer(id, tx, ty, mv) {
+      const p = this.players.get(id);
+      if (!p || !p.alive) return;
+      if (tx >= 0 && ty >= 0 && tx < MAP_W && ty < MAP_H) { p.tx = tx; p.ty = ty; }
+      p.mv = mv ? 1 : 0;
+    }
+
+    // Place a bomb at the requesting player's current tile (host-authoritative so
+    // fuses, chains and explosions stay consistent for everyone).
+    placeBomb(id) {
+      const p = this.players.get(id);
+      if (!p || !p.alive || this.state !== 'playing') return;
+      if (p.activeBombs >= p.maxBombs) return;
+      const btx = p.tx, bty = p.ty;
+      if ([...this.bombs.values()].some(b => b.tx === btx && b.ty === bty)) return;
+      const bombId = this._id('b');
+      this.bombs.set(bombId, { id: bombId, tx: btx, ty: bty, timer: BOMB_TIMER_MS, range: p.range, playerId: id });
+      p.activeBombs++;
     }
 
     lobbyMeta() {
@@ -167,19 +168,14 @@
         const spawn = SPAWN_POS[idx] || SPAWN_POS[0];
         player.spawnIdx = idx;
         player.color = PLAYER_COLORS[idx];
-        player.x = spawn.x;
-        player.y = spawn.y;
+        player.tx = Math.floor(spawn.x);
+        player.ty = Math.floor(spawn.y);
+        player.mv = 0;
         player.alive = true;
         player.maxBombs = 1;
         player.activeBombs = 0;
         player.range = 2;
         player.speed = PLAYER_SPEED;
-        player.input = { up: false, down: false, left: false, right: false, bomb: false };
-        player.bombPressed = false;
-        player.moving = false;
-        player.facing = null;
-        player.targetX = spawn.x;
-        player.targetY = spawn.y;
         idx++;
       }
       this.lastTick = now();
@@ -188,33 +184,6 @@
     returnToLobby() {
       this.state = 'lobby';
       this.lastSnapStr = null;
-    }
-
-    // ─── Movement helpers ─────────────────────────────────────────────────────
-    isSolidTile(player, tx, ty) {
-      if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) return true;
-      const v = this.grid[enc(tx, ty)];
-      if (v === TILE_WALL || v === TILE_BLOCK) return true;
-      for (const b of this.bombs.values()) {
-        if (b.tx === tx && b.ty === ty) {
-          return !(Math.floor(player.x) === tx && Math.floor(player.y) === ty);
-        }
-      }
-      return false;
-    }
-
-    chooseStepDir(player, input) {
-      const tx = Math.floor(player.x), ty = Math.floor(player.y);
-      let ordered = STEP_DIRS;
-      if (player.facing) {
-        const f = STEP_DIRS.find(d => d.key === player.facing.key);
-        ordered = [f, ...STEP_DIRS.filter(d => d.key !== f.key)];
-      }
-      for (const d of ordered) {
-        if (!input[d.key]) continue;
-        if (!this.isSolidTile(player, tx + d.dx, ty + d.dy)) return d;
-      }
-      return null;
     }
 
     // ─── Explosion resolution (queue-based chaining) ──────────────────────────
@@ -254,7 +223,7 @@
           }
           for (const p of this.players.values()) {
             if (!p.alive) continue;
-            if (Math.floor(p.x) === cx && Math.floor(p.y) === cy) p.alive = false;
+            if (p.tx === cx && p.ty === cy) p.alive = false;
           }
           for (const [bid, b] of this.bombs) {
             if (b.tx === cx && b.ty === cy && !processed.has(bid)) queue.push(bid);
@@ -265,59 +234,13 @@
     }
 
     // ─── Tick (was tickRoom). Returns { gridChanged }. ────────────────────────
+    // Movement and bomb placement are no longer simulated here — clients own
+    // their positions (reportPlayer) and request bombs (placeBomb). The tick only
+    // advances host-authoritative state: bomb fuses, explosions, pickups, deaths.
     tick() {
       const t = now();
       const dt = Math.min((t - this.lastTick) / 1000, 0.1);
       this.lastTick = t;
-
-      for (const player of this.players.values()) {
-        if (!player.alive) continue;
-        const input = player.input;
-
-        let remaining = player.speed * dt;
-        let guard = 0;
-        while (remaining > 0 && guard++ < 8) {
-          if (!player.moving) {
-            const dir = this.chooseStepDir(player, input);
-            if (!dir) break;
-            player.facing = dir;
-            player.moving = true;
-            player.targetX = Math.floor(player.x) + dir.dx + 0.5;
-            player.targetY = Math.floor(player.y) + dir.dy + 0.5;
-          }
-          const dxT = player.targetX - player.x;
-          const dyT = player.targetY - player.y;
-          const dist = Math.abs(dxT) + Math.abs(dyT);
-          if (dist <= remaining + 1e-6) {
-            player.x = player.targetX;
-            player.y = player.targetY;
-            remaining -= dist;
-            player.moving = false;
-          } else {
-            player.x += Math.sign(dxT) * Math.min(remaining, Math.abs(dxT));
-            player.y += Math.sign(dyT) * Math.min(remaining, Math.abs(dyT));
-            remaining = 0;
-          }
-        }
-
-        if (input.bomb && !player.bombPressed) {
-          if (player.activeBombs < player.maxBombs) {
-            const btx = Math.floor(player.x);
-            const bty = Math.floor(player.y);
-            const occupied = [...this.bombs.values()].some(b => b.tx === btx && b.ty === bty);
-            if (!occupied) {
-              const bombId = this._id('b');
-              this.bombs.set(bombId, {
-                id: bombId, tx: btx, ty: bty,
-                timer: BOMB_TIMER_MS, range: player.range, playerId: player.id,
-              });
-              player.activeBombs++;
-            }
-          }
-          player.bombPressed = true;
-        }
-        if (!input.bomb) player.bombPressed = false;
-      }
 
       let gridChanged = false;
       const toDetonate = [];
@@ -339,7 +262,7 @@
         const pu = this.powerups[i];
         for (const p of this.players.values()) {
           if (!p.alive) continue;
-          if (Math.floor(p.x) === pu.tx && Math.floor(p.y) === pu.ty) {
+          if (p.tx === pu.tx && p.ty === pu.ty) {
             if (pu.type === 'bomb')  p.maxBombs = Math.min(p.maxBombs + 1, 5);
             if (pu.type === 'range') p.range    = Math.min(p.range + 1, 7);
             if (pu.type === 'speed') p.speed    = Math.min(p.speed + 0.5, 8);
@@ -371,9 +294,7 @@
         state: this.state,
         players: [...this.players.values()].map(p => ({
           id: p.id,
-          tx: Math.floor(p.moving ? p.targetX : p.x),
-          ty: Math.floor(p.moving ? p.targetY : p.y),
-          mv: p.moving ? 1 : 0,
+          tx: p.tx, ty: p.ty, mv: p.mv,
           alive: p.alive,
           maxBombs: p.maxBombs, range: p.range, speed: p.speed,
           score: this.scores[p.id] || 0,
