@@ -9,6 +9,7 @@ let myId     = null;
 let roomId   = null;
 let isHost   = false;
 let screen   = 'lobby';   // 'lobby' | 'game' | 'end'
+let pendingJoinCode = null;   // last code we tried to join (for the "host it instead" offer)
 
 let MAP_W = 15, MAP_H = 13;
 let gameSnap = null;   // latest snapshot from server
@@ -581,6 +582,10 @@ Net.onLobbyState = data => {
 
 Net.onJoinError = msg => {
   document.getElementById('join-error').textContent = msg;
+  // If the room is simply gone (host left, or never existed), offer to host it
+  // under the same code so any shared invite link keeps working.
+  const hostBtn = document.getElementById('btn-host-room');
+  hostBtn.style.display = (msg === 'Room not found' && pendingJoinCode) ? '' : 'none';
 };
 
 Net.onHostLeft = () => {
@@ -668,10 +673,13 @@ function lockJoinUI() {
 window.addEventListener('DOMContentLoaded', () => {
   setupTouchControls();
 
-  // Auto-fill room code from URL param
+  // Arriving via an invite link → prefill the code and present a join-only
+  // screen (hide the create option + divider; the host already made the room).
   const urlRoom = new URLSearchParams(window.location.search).get('room');
   if (urlRoom) {
     document.getElementById('join-input').value = urlRoom.toUpperCase();
+    document.getElementById('btn-create').style.display = 'none';
+    document.getElementById('lobby-divider').style.display = 'none';
   }
 
   // Create room
@@ -696,8 +704,20 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!name) { alert('Enter your name first!'); return; }
     if (!code) { alert('Enter a room code!'); return; }
     document.getElementById('join-error').textContent = '';
+    document.getElementById('btn-host-room').style.display = 'none';
+    pendingJoinCode = code;
     Net.joinRoom(code, name);
   }
+
+  // "Room not found" fallback → host the room under the same code.
+  document.getElementById('btn-host-room').addEventListener('click', () => {
+    const name = document.getElementById('name-input').value.trim();
+    if (!name) { alert('Enter your name first!'); return; }
+    if (!pendingJoinCode) return;
+    document.getElementById('join-error').textContent = '';
+    document.getElementById('btn-host-room').style.display = 'none';
+    Net.createRoom(name, pendingJoinCode);
+  });
 
   // Copy invite link
   document.getElementById('btn-copy').addEventListener('click', () => {

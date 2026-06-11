@@ -33,9 +33,19 @@ function generateRoomId() {
 io.on('connection', (socket) => {
   let roomCode = null;   // room this socket belongs to
 
-  socket.on('createRoom', ({ name }) => {
+  socket.on('createRoom', ({ name, roomId }) => {
     if (!name || typeof name !== 'string') return;
-    const id = generateRoomId();
+    // A requested code (from an invite link whose host has since left) lets the
+    // new host reuse the same code so the original link keeps working. Otherwise
+    // generate a fresh one.
+    let id;
+    if (roomId && typeof roomId === 'string') {
+      id = roomId.toUpperCase().trim();
+      if (!/^[A-Z0-9]{1,6}$/.test(id)) id = generateRoomId();
+      else if (rooms.has(id)) return socket.emit('joinError', 'Room already exists — try joining instead');
+    } else {
+      id = generateRoomId();
+    }
     rooms.set(id, { hostId: socket.id, members: new Set([socket.id]), started: false });
     roomCode = id;
     socket.emit('roomCreated', { roomId: id, hostId: socket.id });

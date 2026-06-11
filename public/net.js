@@ -226,7 +226,10 @@
   sig.on('connect_error', () => { Net.onJoinError && Net.onJoinError('Connection error — refresh the page.'); });
 
   // ─── Public actions ───────────────────────────────────────────────────────
-  Net.createRoom = function (name) { myName = name; sig.emit('createRoom', { name }); };
+  Net.createRoom = function (name, code) {
+    myName = name;
+    sig.emit('createRoom', code ? { name, roomId: code } : { name });
+  };
   Net.joinRoom   = function (code, name) { myName = name; sig.emit('joinRoom', { roomId: code, name }); };
 
   Net.startGame = function () {
